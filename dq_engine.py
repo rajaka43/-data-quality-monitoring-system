@@ -204,10 +204,20 @@ class DataQualityEngine:
         cleaned      = raw_snapshot.copy()
         actions: list[dict] = []
 
-        # ── PASS 1: Drop exact-match duplicate rows ─────────────────────
-        dup_count = int(cleaned.duplicated(keep="first").sum())
+        # ── PASS 1: Drop semantic duplicate rows ────────────────────────
+        # Semantic duplicates = rows identical on all NON-ID/key content
+        # columns, even if their ID values differ (e.g. EmployeeID 101 vs 111
+        # for the same person).  We also apply the NaN sentinel so rows that
+        # share NaN in the same column are still compared as equal.
+        _SENTINEL    = "__DQMS_NULL__"
+        id_cols      = [c for c in cleaned.columns if _is_critical_column(c)]
+        content_cols = [c for c in cleaned.columns if c not in id_cols]
+        dedup_cols   = content_cols if content_cols else list(cleaned.columns)
+
+        filled_mask = cleaned[dedup_cols].fillna(_SENTINEL).duplicated(keep="first")
+        dup_count   = int(filled_mask.sum())
         if dup_count > 0:
-            cleaned = cleaned.drop_duplicates(keep="first").reset_index(drop=True)
+            cleaned = cleaned[~filled_mask].reset_index(drop=True)
             actions.append({
                 "pass":     1,
                 "category": "Duplicates",
@@ -485,15 +495,34 @@ class DataQualityEngine:
     # ------------------------------------------------------------------
 
     def _check_uniqueness(self) -> dict:
-        dup_mask       = self.df.duplicated(keep="first")
-        dup_count      = int(dup_mask.sum())
-        dup_frac       = dup_count / self.n_rows if self.n_rows > 0 else 0.0
+        # ── Semantic duplicate detection ────────────────────────────────
+        # Two rows that share the same real-world data but differ only in
+        # their ID/key column are SEMANTIC duplicates — they represent the
+        # same entity entered twice.  A plain df.duplicated() across all
+        # columns misses them because the ID values differ.
+        #
+        # Strategy:
+        #   1. Split columns into "identity" (ID/key) vs "content" (everything else).
+        #   2. Detect duplicates on CONTENT columns only, using a NaN sentinel
+        #      so that rows sharing NaN in the same position are still caught
+        #      (pandas NaN != NaN would otherwise hide them).
+        #   3. Fall back to full-row deduplication when every column is an ID
+        #      column (edge case: tables with only key columns).
+        _SENTINEL = "__DQMS_NULL__"
+
+        id_cols      = [c for c in self.df.columns if _is_critical_column(c)]
+        content_cols = [c for c in self.df.columns if c not in id_cols]
+        dedup_cols   = content_cols if content_cols else list(self.df.columns)
+
+        df_filled = self.df[dedup_cols].fillna(_SENTINEL)
+        dup_mask  = df_filled.duplicated(keep="first")
+        dup_count = int(dup_mask.sum())
+        dup_frac  = dup_count / self.n_rows if self.n_rows > 0 else 0.0
         overall_unique = 1.0 - dup_frac
 
+        # Per-column uniqueness for ID/key columns (their values must be unique)
         per_column = []
-        for col in self.df.columns:
-            if not _is_critical_column(col):
-                continue
+        for col in id_cols:
             non_null      = self.df[col].dropna()
             unique_vals   = non_null.nunique()
             total_vals    = len(non_null)
@@ -515,6 +544,7 @@ class DataQualityEngine:
             "duplicate_row_fraction": round(dup_frac, 4),
             "overall_score":          round(overall_unique, 4),
             "per_column":             per_column,
+            "dedup_columns":          dedup_cols,   # exposed for UI/report
             "pass":                   row_pass and col_pass,
         }
 
@@ -727,13 +757,23 @@ class _SnapshotChecker:
         }
 
     def check_uniqueness(self) -> dict:
-        dup_count = int(self.df.duplicated(keep="first").sum())
+        # Mirror the semantic duplicate logic from DataQualityEngine._check_uniqueness:
+        # compare only content (non-ID) columns so rows with differing IDs but
+        # identical data are correctly flagged. NaN sentinel prevents NaN!=NaN misses.
+        _SENTINEL    = "__DQMS_NULL__"
+        id_cols      = [c for c in self.df.columns if _is_critical_column(c)]
+        content_cols = [c for c in self.df.columns if c not in id_cols]
+        dedup_cols   = content_cols if content_cols else list(self.df.columns)
+
+        df_filled = self.df[dedup_cols].fillna(_SENTINEL)
+        dup_count = int(df_filled.duplicated(keep="first").sum())
         dup_frac  = dup_count / self.n_rows if self.n_rows > 0 else 0.0
         return {
             "duplicate_row_count":    dup_count,
             "duplicate_row_fraction": round(dup_frac, 4),
             "overall_score":          round(1.0 - dup_frac, 4),
             "per_column":             [],
+            "dedup_columns":          dedup_cols,
             "pass":                   dup_frac <= THRESHOLDS["max_duplicate_fraction"],
         }
 
