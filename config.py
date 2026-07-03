@@ -124,12 +124,3 @@ SEVERITY = {
     "warning":  "WARNING",    # Review recommended
     "info":     "INFO",       # Informational only
 }
-
-# ---------------------------------------------------------------------------
-# 7. REPORT METADATA
-# ---------------------------------------------------------------------------
-
-REPORT_TITLE    = "Data Governance Framework & Health Report"
-REPORT_VERSION  = "v1.0"
-SYSTEM_NAME     = "Data Quality Monitoring System (DQMS)"
-ORG_NAME        = "Data Engineering Division"
