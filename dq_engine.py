@@ -900,4 +900,22 @@ class ObservabilityStore:
             return df.iloc[::-1].reset_index(drop=True)
         except Exception:
             return pd.DataFrame()
+    def load_report_json(self, run_id: str) -> DQReport | None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute(
+                    "SELECT report_json FROM dq_runs WHERE run_id = ? LIMIT 1", (run_id,)
+                )
+                row = cur.fetchone()
+            return json.loads(row[0]) if row else None
+        except Exception:
+            return None
+
+    def get_run_count(self) -> int:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.execute("SELECT COUNT(*) FROM dq_runs")
+                return cur.fetchone()[0]
+        except Exception:
+            return 0
 
